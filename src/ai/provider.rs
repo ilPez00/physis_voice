@@ -264,6 +264,52 @@ impl Provider {
         let tr: TransResponse = resp.json().await?;
         Ok(tr.text)
     }
+
+    pub async fn transcribe_deepgram(&self, audio_path: &str) -> AiResult<String> {
+        let url = format!(
+            "{}/listen?model=nova-2&language=it&punctuate=true&smart_format=true",
+            self.config.base_url.trim_end_matches('/')
+        );
+
+        let file_content = std::fs::read(audio_path)?;
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Token {}", self.config.api_key))
+            .header("Content-Type", "audio/wav")
+            .body(file_content)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(AiError::Provider(format!("deepgram failed: {}", resp.text().await?)));
+        }
+
+        #[derive(Deserialize)]
+        struct DeepgramResponse {
+            results: Results,
+        }
+        #[derive(Deserialize)]
+        struct Results {
+            channels: Vec<Channel>,
+        }
+        #[derive(Deserialize)]
+        struct Channel {
+            alternatives: Vec<Alternative>,
+        }
+        #[derive(Deserialize)]
+        struct Alternative {
+            transcript: String,
+        }
+
+        let dr: DeepgramResponse = resp.json().await?;
+        Ok(dr.results.channels
+            .first()
+            .and_then(|c| c.alternatives.first())
+            .map(|a| a.transcript.clone())
+            .unwrap_or_default())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,6 +411,76 @@ impl ProviderCascade {
             });
         }
 
+        // Mistral AI
+        let mistral_key = std::env::var("AI_MISTRAL_KEY")
+            .or_else(|_| std::env::var("MISTRAL"))
+            .ok()
+            .filter(|k| !k.is_empty());
+        let mistral_url = std::env::var("EP_MISTRAL")
+            .unwrap_or_else(|_| "https://api.mistral.ai/v1".into());
+        if let Some(key) = mistral_key {
+            cascade.add(ProviderConfig {
+                name: "mistral".into(),
+                base_url: mistral_url,
+                model: std::env::var("MISTRAL_MODEL")
+                    .unwrap_or_else(|_| "mistral-large-latest".into()),
+                api_key: key,
+                supports_vision: true,
+                supports_tools: true,
+                max_tokens: 8192,
+                timeout_secs: 30.0,
+            });
+        }
+
+        // Vertex AI (GCP) via OAuth token
+        let vertex_project = std::env::var("CLOUD_PROJECT_ID").ok().filter(|k| !k.is_empty());
+        if let Some(project) = vertex_project {
+            let region = std::env::var("VERTEX_REGION").unwrap_or_else(|_| "us-central1".into());
+            let token = std::env::var("VERTEX_OAUTH_TOKEN")
+                .unwrap_or_else(|_| {
+                    std::process::Command::new("gcloud")
+                        .args(["auth", "print-access-token"])
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default()
+                });
+
+            if !token.is_empty() {
+                cascade.add(ProviderConfig {
+                    name: "vertex".into(),
+                    base_url: format!(
+                        "https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{region}/endpoints/openapi",
+                    ),
+                    model: std::env::var("VERTEX_MODEL")
+                        .unwrap_or_else(|_| "gemini-2.0-flash-001".into()),
+                    api_key: token,
+                    supports_vision: true,
+                    supports_tools: true,
+                    max_tokens: 8192,
+                    timeout_secs: 30.0,
+                });
+            }
+        }
+
+        // Deepgram STT
+        let deepgram_key = std::env::var("STT_DEEPGRAM_KEY").ok().filter(|k| !k.is_empty());
+        if let Some(key) = deepgram_key {
+            let url = std::env::var("STT_DEEPGRAM_ENDPOINT")
+                .unwrap_or_else(|_| "https://api.deepgram.com/v1".into());
+            cascade.add(ProviderConfig {
+                name: "deepgram".into(),
+                base_url: url,
+                model: "nova-2".into(),
+                api_key: key,
+                supports_vision: false,
+                supports_tools: false,
+                max_tokens: 0,
+                timeout_secs: 30.0,
+            });
+        }
+
         // Local Ollama
         cascade.add(ProviderConfig {
             name: "ollama".into(),
@@ -455,10 +571,23 @@ impl ProviderCascade {
     }
 
     pub async fn transcribe(&self, audio_path: &str) -> AiResult<String> {
+        // 1) Groq (Whisper via API)
         let groq = self.providers.iter().find(|p| p.name() == "groq");
         if let Some(p) = groq {
-            return p.transcribe(audio_path).await;
+            match p.transcribe(audio_path).await {
+                Ok(t) if !t.trim().is_empty() => return Ok(t),
+                _ => {}
+            }
         }
+        // 2) Deepgram (Nova-2)
+        let deepgram = self.providers.iter().find(|p| p.name() == "deepgram");
+        if let Some(p) = deepgram {
+            match p.transcribe_deepgram(audio_path).await {
+                Ok(t) if !t.trim().is_empty() => return Ok(t),
+                _ => {}
+            }
+        }
+        // 3) OpenAI (Whisper fallback)
         let openai = self.providers.iter().find(|p| p.name() == "openai");
         if let Some(p) = openai {
             return p.transcribe(audio_path).await;

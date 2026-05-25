@@ -6,13 +6,12 @@ use ai::agent::{run_agent, AgentConfig};
 use ai::tools::ToolRegistry;
 use physis::OntologicalMap;
 
-use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use axum::{extract::State, routing::get, Json, Router};
-use tower_http::services::ServeDir;
+
 use dotenvy::dotenv;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -151,34 +150,4 @@ async fn index() -> axum::response::Html<&'static str> {
 #[derive(Serialize, Deserialize)]
 struct TranscriptUpdate {
     text: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-struct OntologicalMap {
-    entities: HashMap<String, Entity>,
-    relationships: Vec<Relationship>,
-}
-
-impl OntologicalMap {
-    fn merge(&mut self, other: OntologicalMap) {
-        self.entities.extend(other.entities);
-        self.relationships.extend(other.relationships);
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct Entity {
-    id: String,
-    name: String,
-    kind: String,
-    description: String,
-    attributes: HashMap<String, String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct Relationship {
-    source: String,
-    target: String,
-    predicate: String,
-    weight: f64,
 }

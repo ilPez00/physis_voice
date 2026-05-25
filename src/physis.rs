@@ -1,28 +1,32 @@
-pub mod actor;
-pub mod config;
-pub mod dream;
-pub mod mapper;
-pub mod models;
-pub mod ontology;
-pub mod ontology_nonhuman;
-pub mod output;
-pub mod scanner;
-pub mod trie;
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
-pub mod network;
-pub mod mcp;
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct OntologicalMap {
+    pub entities: HashMap<String, Entity>,
+    pub relationships: Vec<Relationship>,
+}
 
-#[cfg(feature = "cli")]
-pub mod cli;
+impl OntologicalMap {
+    pub fn merge(&mut self, other: OntologicalMap) {
+        self.entities.extend(other.entities);
+        self.relationships.extend(other.relationships);
+    }
+}
 
-pub use actor::PDCActor;
-pub use config::{OntologyLoader, PhysisConfig};
-pub use dream::DreamEngine;
-pub use mapper::OntologyMapper;
-pub use models::*;
-pub use output::*;
-pub use scanner::*;
-pub use trie::DynamicVectorTrie;
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Entity {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub description: String,
+    pub attributes: HashMap<String, String>,
+}
 
-#[cfg(feature = "cli")]
-pub use cli::PhysisApp;
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Relationship {
+    pub source: String,
+    pub target: String,
+    pub predicate: String,
+    pub weight: f64,
+}
