@@ -1,5 +1,11 @@
 # Physis Voice 🎙️🧠
 
+> **⚠️ Folded into `physis_pro`.** This standalone project is superseded by the
+> `physis-pro-voice` binary (`physis_pro/src/bin/voice.rs`), which runs the same
+> pipeline on the shared engine (provider cascade, ontology classifier, Dream
+> Function, multimodal sensory bus). Use that for new work; see
+> `physis_pro/README.md` → "Multimodal Sensory". This repo is kept for reference.
+
 Physis Voice is a real-time ontological mapping engine designed for live conferences and lectures. It captures audio, transcribes it, and uses AI to map concepts, entities, and relationships into an interactive graph.
 
 ## Features
