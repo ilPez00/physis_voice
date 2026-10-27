@@ -13,16 +13,20 @@ Physis Voice is a real-time ontological mapping engine designed for live confere
 - **Live Transcription**: Captures audio in 15s chunks using `arecord`.
 - **Ontological Extraction**: Automatically identifies entities (people, topics, concepts) and their connections.
 - **Interactive Visualization**: Real-time graph UI powered by Cytoscape.js.
-- **Offline Intelligence**: Uses local **Ollama** (`llama3.2`) for concept mapping to ensure privacy and offline capability.
+- **Online Intelligence**: Uses hosted OpenAI-compatible APIs (OpenRouter, NVIDIA, Kilo) for concept mapping. No local model required.
 - **Hacker-style UI**: Green-on-black monospace dashboard at `http://localhost:3000`.
 
 ## Prerequisites
 
 - **Linux** (uses `arecord` from `alsa-utils`).
 - **Rust** (Cargo).
-- **Ollama** (for local AI mapping).
-  - Run `ollama pull llama3.2`
-- **Groq API Key** (for fast transcription).
+- **One chat provider key** — any of `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`,
+  `KILOCODE_API_KEY`, or `GROQ_API_KEY`. The first configured one that answers
+  wins; see the cascade in `src/ai/provider.rs`.
+- **One STT key** for transcription — `GROQ_API_KEY` (fastest, free tier),
+  `STT_DEEPGRAM_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` or
+  `KILOCODE_API_KEY`. OpenRouter and Kilo audio need a funded balance.
+- NVIDIA's hosted API is chat-only: it exposes no `/audio/transcriptions`.
 
 ## Installation & Setup
 
@@ -34,8 +38,13 @@ Physis Voice is a real-time ontological mapping engine designed for live confere
 2. **Configure Keys**:
    Create a `.env` file or export your keys:
    ```bash
-   AI_GROQ_KEY=your_key_here
+   OPENROUTER_API_KEY=sk-or-...
+   GROQ_API_KEY=gsk_...
    ```
+
+   Optional overrides: `OPENROUTER_MODEL`, `NVIDIA_MODEL`, `KILOCODE_MODEL`,
+   `KILOCODE_BASE_URL`, `AURA_BASE_URL` + `AURA_MODEL` (any OpenAI-compatible
+   endpoint).
 
 ## Usage
 

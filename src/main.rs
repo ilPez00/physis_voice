@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .route("/api/data", get(get_data))
             .with_state(app_state_clone);
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
         println!("Visualization UI available at http://localhost:3000");
         println!("(Note: Since this is a demo, we serve a static HTML string at the root)");
         
@@ -45,9 +45,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     println!("Physis Ontological Mapper starting...");
-    println!("Offline Mode: Will attempt local Ollama (llama3.2) for extraction.");
-    
+
     let cascade = ProviderCascade::from_env();
+    println!("Chat providers: {}", cascade.provider_names().join(", "));
     let tools = ToolRegistry::new();
 
     let recording_duration_secs = 15;
@@ -75,8 +75,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         println!("Transcribing...");
-        // Using Groq/OpenRouter for transcription as local Whisper is heavy, 
-        // but extraction will be local.
+        // Transcription is remote (Groq/Deepgram/OpenAI/OpenRouter/Kilo); see
+        // ProviderCascade::transcribe for the order.
         let transcript = match cascade.transcribe(wav_path).await {
             Ok(t) => t,
             Err(e) => {
@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("Transcript: \"{}\"", transcript);
 
-        println!("Extracting ontology (local AI)...");
+        println!("Extracting ontology...");
         let ontologist_config = AgentConfig {
             system_prompt: r#"You are Physis. Extract entities and relationships. 
 Output ONLY valid JSON:
@@ -112,7 +112,6 @@ Output ONLY valid JSON:
             detail: "low".into(),
         };
 
-        // We use "ollama" explicitly if it exists in cascade, otherwise fall back
         let result = run_agent(
             &cascade,
             &tools,
@@ -120,7 +119,7 @@ Output ONLY valid JSON:
             &[],
             &format!("Update map: {}", transcript),
             None,
-            "DATA" // Agent will try to route this to Ollama if configured
+            "DATA"
         ).await;
 
         match result {
@@ -129,7 +128,13 @@ Output ONLY valid JSON:
                     if let Ok(new_map) = serde_json::from_str::<OntologicalMap>(&output.text[start..=end]) {
                         let mut state = shared_state.lock().unwrap();
                         state.map.merge(new_map);
-                        println!("Map updated. Entities: {}", state.map.entities.len());
+                        println!(
+                        "Map updated via {} ({} rounds). Entities: {}, relationships: {}",
+                        output.provider,
+                        output.tool_rounds,
+                        state.map.entities.len(),
+                        state.map.relationships.len()
+                    );
                     }
                 }
             }

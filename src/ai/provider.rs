@@ -12,6 +12,8 @@ pub struct ProviderConfig {
     pub supports_tools: bool,
     pub max_tokens: u32,
     pub timeout_secs: f64,
+    /// Model used by `/audio/transcriptions`; `None` disables STT for this provider.
+    pub stt_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,6 +207,11 @@ impl Provider {
             self.cooldown(30);
             return Err(AiError::Provider(format!("rate limited on {}", self.config.name)));
         }
+        if status == 402 {
+            // Billing, not a transient failure: no retry will fix it this session.
+            self.mark_unavailable();
+            return Err(AiError::Provider(format!("{} out of credits", self.config.name)));
+        }
         if status == 401 || status == 403 {
             self.mark_unavailable();
             return Err(AiError::Provider(format!("auth error on {}", self.config.name)));
@@ -228,6 +235,11 @@ impl Provider {
     }
 
     pub async fn transcribe(&self, audio_path: &str) -> AiResult<String> {
+        let model = self
+            .config
+            .stt_model
+            .as_deref()
+            .ok_or_else(|| AiError::Provider(format!("{} has no STT model", self.config.name)))?;
         let url = format!(
             "{}/audio/transcriptions",
             self.config.base_url.trim_end_matches('/')
@@ -241,7 +253,7 @@ impl Provider {
 
         let form = reqwest::multipart::Form::new()
             .part("file", part)
-            .text("model", "whisper-large-v3");
+            .text("model", model.to_string());
 
         let resp = self
             .client
@@ -267,8 +279,9 @@ impl Provider {
 
     pub async fn transcribe_deepgram(&self, audio_path: &str) -> AiResult<String> {
         let url = format!(
-            "{}/listen?model=nova-2&language=it&punctuate=true&smart_format=true",
-            self.config.base_url.trim_end_matches('/')
+            "{}/listen?model={}&language=it&punctuate=true&smart_format=true",
+            self.config.base_url.trim_end_matches('/'),
+            self.config.stt_model.as_deref().unwrap_or("nova-2")
         );
 
         let file_content = std::fs::read(audio_path)?;
@@ -336,21 +349,72 @@ impl ProviderCascade {
     pub fn from_env() -> Self {
         let mut cascade = Self::new();
 
-        let openrouter_key = std::env::var("AI_OPENROUTER_KEY").ok().filter(|k| !k.is_empty());
+        let openrouter_key = std::env::var("AI_OPENROUTER_KEY")
+            .or_else(|_| std::env::var("OPENROUTER_API_KEY"))
+            .ok()
+            .filter(|k| !k.is_empty());
         if let Some(key) = openrouter_key {
             cascade.add(ProviderConfig {
                 name: "openrouter".into(),
-                base_url: "https://openrouter.ai/api/v1".into(),
-                model: "deepseek/deepseek-chat".into(),
+                base_url: std::env::var("OPENROUTER_BASE_URL")
+                    .unwrap_or_else(|_| "https://openrouter.ai/api/v1".into()),
+                model: std::env::var("OPENROUTER_MODEL")
+                    .unwrap_or_else(|_| "deepseek/deepseek-v4.1-flash".into()),
                 api_key: key,
                 supports_vision: true,
                 supports_tools: true,
                 max_tokens: 4096,
                 timeout_secs: 30.0,
+                // Audio transcription needs a funded OpenRouter balance.
+                stt_model: Some("openai/whisper-large-v3".into()),
             });
         }
 
-        let groq_key = std::env::var("AI_GROQ_KEY").ok().filter(|k| !k.is_empty());
+        let nvidia_key = std::env::var("NVIDIA_API_KEY")
+            .or_else(|_| std::env::var("AI_NVIDIA_KEY"))
+            .ok()
+            .filter(|k| !k.is_empty());
+        if let Some(key) = nvidia_key {
+            cascade.add(ProviderConfig {
+                name: "nvidia".into(),
+                base_url: std::env::var("NVIDIA_BASE_URL")
+                    .unwrap_or_else(|_| "https://integrate.api.nvidia.com/v1".into()),
+                model: std::env::var("NVIDIA_MODEL")
+                    .unwrap_or_else(|_| "nvidia/nemotron-3.5-lightning-30b-a3b".into()),
+                api_key: key,
+                supports_vision: true,
+                supports_tools: true,
+                max_tokens: 4096,
+                timeout_secs: 60.0,
+                // The hosted NVIDIA API exposes no /audio/transcriptions route.
+                stt_model: None,
+            });
+        }
+
+        let kilo_key = std::env::var("KILOCODE_API_KEY")
+            .or_else(|_| std::env::var("AI_KILO_KEY"))
+            .ok()
+            .filter(|k| !k.is_empty());
+        if let Some(key) = kilo_key {
+            cascade.add(ProviderConfig {
+                name: "kilo".into(),
+                base_url: std::env::var("KILOCODE_BASE_URL")
+                    .unwrap_or_else(|_| "https://api.kilo.ai/api/gateway".into()),
+                model: std::env::var("KILOCODE_MODEL")
+                    .unwrap_or_else(|_| "kilo-auto/free".into()),
+                api_key: key,
+                supports_vision: true,
+                supports_tools: true,
+                max_tokens: 4096,
+                timeout_secs: 60.0,
+                stt_model: Some("openai/whisper-large-v3".into()),
+            });
+        }
+
+        let groq_key = std::env::var("AI_GROQ_KEY")
+            .or_else(|_| std::env::var("GROQ_API_KEY"))
+            .ok()
+            .filter(|k| !k.is_empty());
         if let Some(key) = groq_key {
             cascade.add(ProviderConfig {
                 name: "groq".into(),
@@ -361,6 +425,7 @@ impl ProviderCascade {
                 supports_tools: true,
                 max_tokens: 8192,
                 timeout_secs: 15.0,
+                stt_model: Some("whisper-large-v3".into()),
             });
         }
 
@@ -380,6 +445,7 @@ impl ProviderCascade {
                 supports_tools: true,
                 max_tokens: 4096,
                 timeout_secs: 30.0,
+                stt_model: Some("whisper-1".into()),
             });
         }
 
@@ -394,6 +460,7 @@ impl ProviderCascade {
                 supports_tools: true,
                 max_tokens: 8192,
                 timeout_secs: 30.0,
+                stt_model: None,
             });
         }
 
@@ -408,6 +475,7 @@ impl ProviderCascade {
                 supports_tools: true,
                 max_tokens: 8192,
                 timeout_secs: 30.0,
+                stt_model: None,
             });
         }
 
@@ -429,6 +497,7 @@ impl ProviderCascade {
                 supports_tools: true,
                 max_tokens: 8192,
                 timeout_secs: 30.0,
+                stt_model: None,
             });
         }
 
@@ -460,12 +529,16 @@ impl ProviderCascade {
                     supports_tools: true,
                     max_tokens: 8192,
                     timeout_secs: 30.0,
+                    stt_model: None,
                 });
             }
         }
 
         // Deepgram STT
-        let deepgram_key = std::env::var("STT_DEEPGRAM_KEY").ok().filter(|k| !k.is_empty());
+        let deepgram_key = std::env::var("STT_DEEPGRAM_KEY")
+            .or_else(|_| std::env::var("DEEPGRAM_API_KEY"))
+            .ok()
+            .filter(|k| !k.is_empty());
         if let Some(key) = deepgram_key {
             let url = std::env::var("STT_DEEPGRAM_ENDPOINT")
                 .unwrap_or_else(|_| "https://api.deepgram.com/v1".into());
@@ -478,20 +551,9 @@ impl ProviderCascade {
                 supports_tools: false,
                 max_tokens: 0,
                 timeout_secs: 30.0,
+                stt_model: Some("nova-2".into()),
             });
         }
-
-        // Local Ollama
-        cascade.add(ProviderConfig {
-            name: "ollama".into(),
-            base_url: "http://localhost:11434/v1".into(),
-            model: "llama3.2".into(),
-            api_key: "ollama".into(),
-            supports_vision: false,
-            supports_tools: false,
-            max_tokens: 4096,
-            timeout_secs: 60.0,
-        });
 
         cascade
     }
@@ -571,26 +633,21 @@ impl ProviderCascade {
     }
 
     pub async fn transcribe(&self, audio_path: &str) -> AiResult<String> {
-        // 1) Groq (Whisper via API)
-        let groq = self.providers.iter().find(|p| p.name() == "groq");
-        if let Some(p) = groq {
-            match p.transcribe(audio_path).await {
+        // Order: cheapest/fastest first. Deepgram needs its own request shape.
+        for name in ["groq", "deepgram", "openai", "openrouter", "kilo"] {
+            let Some(p) = self.providers.iter().find(|p| p.name() == name) else {
+                continue;
+            };
+            let result = if name == "deepgram" {
+                p.transcribe_deepgram(audio_path).await
+            } else {
+                p.transcribe(audio_path).await
+            };
+            match result {
                 Ok(t) if !t.trim().is_empty() => return Ok(t),
-                _ => {}
+                Ok(_) => {}
+                Err(e) => log::warn!("stt {} failed: {:?}", name, e),
             }
-        }
-        // 2) Deepgram (Nova-2)
-        let deepgram = self.providers.iter().find(|p| p.name() == "deepgram");
-        if let Some(p) = deepgram {
-            match p.transcribe_deepgram(audio_path).await {
-                Ok(t) if !t.trim().is_empty() => return Ok(t),
-                _ => {}
-            }
-        }
-        // 3) OpenAI (Whisper fallback)
-        let openai = self.providers.iter().find(|p| p.name() == "openai");
-        if let Some(p) = openai {
-            return p.transcribe(audio_path).await;
         }
         Err(AiError::NoProvider)
     }
