@@ -22,6 +22,17 @@ struct AppState {
 
 type SharedState = Arc<Mutex<AppState>>;
 
+/// Keeps the API payload and memory bounded on a multi-hour lecture.
+const MAX_TRANSCRIPTS: usize = 500;
+
+impl AppState {
+    fn push_transcript(&mut self, transcript: String) {
+        self.transcripts.push(transcript);
+        let overflow = self.transcripts.len().saturating_sub(MAX_TRANSCRIPTS);
+        self.transcripts.drain(..overflow);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
@@ -91,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         {
             let mut state = shared_state.lock().unwrap();
-            state.transcripts.push(transcript.clone());
+            state.push_transcript(transcript.clone());
         }
 
         println!("Transcript: \"{}\"", transcript);
@@ -155,4 +166,29 @@ async fn index() -> axum::response::Html<&'static str> {
 #[derive(Serialize, Deserialize)]
 struct TranscriptUpdate {
     text: String,
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcripts_are_capped() {
+        let mut state = AppState::default();
+        for i in 0..(MAX_TRANSCRIPTS + 10) {
+            state.push_transcript(format!("t{i}"));
+        }
+        assert_eq!(state.transcripts.len(), MAX_TRANSCRIPTS);
+        assert_eq!(state.transcripts.first().unwrap(), "t10");
+        assert_eq!(
+            state.transcripts.last().unwrap(),
+            &format!("t{}", MAX_TRANSCRIPTS + 9)
+        );
+    }
+
+    #[test]
+    fn transcripts_under_cap_are_kept() {
+        let mut state = AppState::default();
+        state.push_transcript("only".into());
+        assert_eq!(state.transcripts, vec!["only".to_string()]);
+    }
 }
